@@ -10,36 +10,37 @@
 
 set -e
 
-REPO_DIR=updated/emoji-cheat-sheet.com
-REPO_SOURCE=https://github.com/arvida/emoji-cheat-sheet.com.git
+function downloadEmoji() {
+	local name=$( echo ${1} | cut -d'=' -f1 )
+	local url=$( echo ${1} | cut -d'=' -f2 )
+	curl -o "images/emoji/${name}.png" $url
+}
+
+export -f downloadEmoji
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+EMOJIS_JSON_FILE="github_emojis.json"
+EMOJIS_TEXT_FILE="github_emojis.txt"
+TEMPLATE_FILE="emojify.js.template"
+OUTPUT_FILE="emojify.js"
 
+# Remember the callers current directory
+pushd . > /dev/null && cd ${SCRIPT_DIR}
 
-pushd .
+# Download the list of emojis as name -> url
+curl -s https://api.github.com/emojis | jq '.' > ${EMOJIS_JSON_FILE}
+cat ${EMOJIS_JSON_FILE} | jq -r '. | to_entries | map([.key, .value] | join("=")) | join("\n")' > ${EMOJIS_TEXT_FILE}
 
-cd $SCRIPT_DIR
+# Download the emoji images and save them to images/emoji/*.png
+cat ${EMOJIS_TEXT_FILE} | xargs -P10 -n1 -L1 -I'{}' bash -c 'downloadEmoji "{}"'
 
-if [ -d $REPO_DIR ]; then
-  cd  $REPO_DIR
-  git reset --hard
-  git pull
-  cd $SCRIPT_DIR
-else
-  mkdir -p $REPO_DIR
-  git clone $REPO_SOURCE $REPO_DIR
-fi
+# Render the js template with list of emoji-names
+EMOJILIST=$( cat ${EMOJIS_JSON_FILE} | jq -r --join-output '. | to_entries | map(.key) | join(",")' )
+sed -e "s/{{ EMOJILIST }}/${EMOJILIST}/g" ${TEMPLATE_FILE} > ${OUTPUT_FILE}
 
-cp $REPO_DIR/public/graphics/emojis/*.png images/emoji
+# Cleanup
+rm -f ${EMOJIS_JSON_FILE}
+rm -f ${EMOJIS_TEXT_FILE}
 
-EMOJI="            \"$(ls images/emoji/*.png | cut -d/ -f3 | cut -d\. -f1 | tr \\n ,|sed 's/,$//')\";"
-
-awk -v emoji="$EMOJI" '
-    $0 ~ /##EMOJILISTSTART/ {skip=1; print; next}
-    $0 ~ /##EMOJILISTEND/ {skip=0; print emoji; }
-    !skip {print}
-' emojify.js > emoji.js-new
-
-mv emoji.js-new emojify.js
-
-popd
+# Go back to callers original directory
+popd > /dev/null
